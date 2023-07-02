@@ -51,19 +51,6 @@ typedef struct {
 } Key;
 
 /**
- * a button struct represents a combination of
- * mask   - a modifier mask
- * button - and the mouse button pressed
- * func   - the function to be triggered because of the above combo
- * arg    - the argument to the function
- */
-typedef struct {
-    unsigned int mask, button;
-    void (*func)(const Arg *);
-    const Arg arg;
-} Button;
-
-/**
  * define behavior of certain applications
  * configured in config.h
  *
@@ -140,7 +127,6 @@ typedef struct {
 
 /* hidden function prototypes sorted alphabetically */
 static Client* addwindow(Window w, Desktop *d);
-static void buttonpress(XEvent *e);
 static void cleanup(void);
 static void clientmessage(XEvent *e);
 static void configurerequest(XEvent *e);
@@ -151,7 +137,6 @@ static void enternotify(XEvent *e);
 static void focus(Client *c, Desktop *d);
 static void focusin(XEvent *e);
 static unsigned long getcolor(const char* color, const int screen);
-static void grabbuttons(Client *c);
 static void grabkeys(void);
 static void grid(int x, int y, int w, int h, const Desktop *d);
 static void keypress(XEvent *e);
@@ -201,7 +186,6 @@ static Desktop desktops[DESKTOPS];
 static void (*events[LASTEvent])(XEvent *e) = {
     [KeyPress]         = keypress,     [EnterNotify]    = enternotify,
     [MapRequest]       = maprequest,   [ClientMessage]  = clientmessage,
-    [ButtonPress]      = buttonpress,  [DestroyNotify]  = destroynotify,
     [UnmapNotify]      = unmapnotify,  [PropertyNotify] = propertynotify,
     [ConfigureRequest] = configurerequest,    [FocusIn] = focusin,
 };
@@ -239,24 +223,6 @@ Client* addwindow(Window w, Desktop *d) {
 
     XSelectInput(dis, (c->win = w), PropertyChangeMask|FocusChangeMask|(FOLLOW_MOUSE?EnterWindowMask:0));
     return c;
-}
-
-/**
- * on the press of a key binding (see grabkeys)
- * call the appropriate handler
- */
-void buttonpress(XEvent *e) {
-    Desktop *d = NULL; Client *c = NULL;
-    Bool w = wintoclient(e->xbutton.window, &c, &d);
-
-    if (w && CLICK_TO_FOCUS && c != d->curr && e->xbutton.button == FOCUS_BUTTON) focus(c, d);
-
-    for (unsigned int i = 0; i < LENGTH(buttons); i++)
-        if (CLEANMASK(buttons[i].mask) == CLEANMASK(e->xbutton.state) &&
-            buttons[i].func && buttons[i].button == e->xbutton.button) {
-            if (c && d->curr != c) focus(c, d);
-            buttons[i].func(&(buttons[i].arg));
-        }
 }
 
 /**
@@ -544,7 +510,6 @@ void focus(Client *c, Desktop *d) {
         XSetWindowBorderWidth(dis, c->win, c->isfull || (!ISFFT(c) &&
             (d->mode == MONOCLE || !d->head->next)) ? 0:BORDER_WIDTH);
         if (c != d->curr) w[c->isfull ? --fl:ISFFT(c) ? --ft:--n] = c->win;
-        if (CLICK_TO_FOCUS || c == d->curr) grabbuttons(c);
     }
     XRestackWindows(dis, w, LENGTH(w));
 
@@ -592,25 +557,6 @@ unsigned long getcolor(const char* color, const int screen) {
     return c.pixel;
 }
 
-/**
- * register button bindings to be notified of
- * when they occur.
- * the wm listens to those button bindings and
- * calls an appropriate handler when a binding
- * occurs (see buttonpress).
- */
-void grabbuttons(Client *c) {
-    unsigned int b, m, modifiers[] = { 0, LockMask, numlockmask, numlockmask|LockMask };
-
-    for (m = 0; CLICK_TO_FOCUS && m < LENGTH(modifiers); m++)
-        if (c != desktops[currdeskidx].curr) XGrabButton(dis, FOCUS_BUTTON, modifiers[m],
-                c->win, False, BUTTONMASK, GrabModeAsync, GrabModeAsync, None, None);
-        else XUngrabButton(dis, FOCUS_BUTTON, modifiers[m], c->win);
-
-    for (b = 0, m = 0; b < LENGTH(buttons); b++, m = 0) while (m < LENGTH(modifiers))
-        XGrabButton(dis, buttons[b].button, buttons[b].mask|modifiers[m++], c->win,
-                      False, BUTTONMASK, GrabModeAsync, GrabModeAsync, None, None);
-}
 
 /**
  * register key bindings to be notified of
@@ -730,52 +676,6 @@ void maprequest(XEvent *e) {
     focus(c, d);
 
     if (!follow) desktopinfo();
-}
-
-/**
- * handle resize and positioning of a window with the pointer.
- *
- * grab the pointer and get it's current position.
- * now, all pointer movement events will be reported until it is ungrabbed.
- *
- * while the mouse is pressed, grab interesting events (see button press,
- * button release, pointer motion).
- * on on pointer movement resize or move the window under the curson.
- * also handle map requests and configure requests.
- *
- * finally, on ButtonRelease, ungrab the poitner.
- * event handling is passed back to run() function.
- *
- * once a window has been moved or resized, it's marked as floating.
- */
-void mousemotion(const Arg *arg) {
-    Desktop *d = &desktops[currdeskidx];
-    XWindowAttributes wa;
-    XEvent ev;
-
-    if (!d->curr || !XGetWindowAttributes(dis, d->curr->win, &wa)) return;
-
-    if (arg->i == RESIZE) XWarpPointer(dis, d->curr->win, d->curr->win, 0, 0, 0, 0, --wa.width, --wa.height);
-    int rx, ry, c, xw, yh; unsigned int v; Window w;
-    if (!XQueryPointer(dis, root, &w, &w, &rx, &ry, &c, &c, &v) || w != d->curr->win) return;
-
-    if (XGrabPointer(dis, root, False, BUTTONMASK|PointerMotionMask, GrabModeAsync,
-                     GrabModeAsync, None, None, CurrentTime) != GrabSuccess) return;
-
-    if (!d->curr->isfloat && !d->curr->istrans) { d->curr->isfloat = True; tile(d); focus(d->curr, d); }
-
-    do {
-        XMaskEvent(dis, BUTTONMASK|PointerMotionMask|SubstructureRedirectMask, &ev);
-        if (ev.type == MotionNotify) {
-            xw = (arg->i == MOVE ? wa.x:wa.width)  + ev.xmotion.x - rx;
-            yh = (arg->i == MOVE ? wa.y:wa.height) + ev.xmotion.y - ry;
-            if (arg->i == RESIZE) XResizeWindow(dis, d->curr->win,
-                    xw > MINWSZ ? xw:wa.width, yh > MINWSZ ? yh:wa.height);
-            else if (arg->i == MOVE) XMoveWindow(dis, d->curr->win, xw, yh);
-        } else if (ev.type == ConfigureRequest || ev.type == MapRequest) events[ev.type](&ev);
-    } while (ev.type != ButtonRelease);
-
-    XUngrabPointer(dis, CurrentTime);
 }
 
 /**

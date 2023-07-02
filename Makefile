@@ -16,7 +16,7 @@ LIBS = -L/usr/lib -lc ${X11LIB}
 CFLAGS   = -std=c99 -pedantic -Wall -Wextra ${INCS} -DVERSION=\"${VERSION}\"
 LDFLAGS  = ${LIBS}
 
-CC 	 = cc
+CC 	 = tcc
 EXEC = ${WMNAME}
 
 SRC = ${WMNAME}.c
